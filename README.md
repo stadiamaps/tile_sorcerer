@@ -1,6 +1,8 @@
 # Tile Sorcerer
 
-This crate provides tools for modeling and querying vector tile sources.
+[![](https://img.shields.io/crates/v/tile_sorcerer.svg)](https://crates.io/crates/tile_sorcerer) [![](https://docs.rs/tile_sorcerer/badge.svg)](https://docs.rs/tile_sorcerer)
+
+Tools for modeling and querying vector tile sources.
 
 ## Current status
 

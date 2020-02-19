@@ -6,6 +6,8 @@ license = "BSD-3-Clause"
 repository = "https://github.com/stadiamaps/tile_sorcerer"
 readme = "README.md"
 description = "Tools for modeling and querying vector tile sources"
+categories = ["parser-implementations", "database", "science"]
+keywords = ["gis", "vector", "map", "tiles"]
 edition = "2018"
 
 [dependencies]
