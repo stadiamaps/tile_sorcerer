@@ -10,9 +10,7 @@ use serde::Deserialize;
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{query, PgPool, Row};
-
-use futures::stream::StreamExt;
+use sqlx::{query, PgPool, Row, cursor::Cursor};
 
 /// A TileMill (.tm2source) data structure.
 ///
@@ -147,14 +145,9 @@ impl TileSource for TM2Source {
 
         let mut raw_tile: Vec<u8> = Vec::new();
         let mut stream = query.fetch(&mut conn);
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(row) => {
-                    let layer: Vec<u8> = row.get(0);
-                    raw_tile.extend_from_slice(&layer);
-                }
-                Err(e) => return Err(e),
-            }
+        while let Some(row) = stream.next().await? {
+            let layer: Vec<u8> = row.get(0);
+            raw_tile.extend_from_slice(&layer);
         }
 
         Ok(raw_tile)
