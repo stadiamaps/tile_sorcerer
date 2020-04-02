@@ -10,7 +10,7 @@ use serde::Deserialize;
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{query, PgPool, Row, cursor::Cursor};
+use sqlx::{cursor::Cursor, query, PgPool, Row};
 
 /// A TileMill (.tm2source) data structure.
 ///
@@ -118,7 +118,13 @@ impl TM2Source {
 
 #[async_trait]
 impl TileSource for TM2Source {
-    async fn render_mvt(&self, pool: &PgPool, zoom: u8, x: i32, y: i32) -> Result<Vec<u8>, sqlx::Error> {
+    async fn render_mvt(
+        &self,
+        pool: &PgPool,
+        zoom: u8,
+        x: i32,
+        y: i32,
+    ) -> Result<Vec<u8>, sqlx::Error> {
         let z: i32 = zoom.into();
         let tile_bounds = get_epsg_3857_tile_bounds(self.pixel_scale, zoom, x, y, 0);
         let buffer_sizes = self.buffer_sizes();

@@ -17,7 +17,13 @@ use sqlx::PgPool;
 #[async_trait]
 pub trait TileSource: Sized {
     /// Renders the Mapbox vector tile for a slippy map tile in XYZ format.
-    async fn render_mvt(&self, pool: &PgPool, zoom: u8, x: i32, y: i32) -> Result<Vec<u8>, sqlx::Error>;
+    async fn render_mvt(
+        &self,
+        pool: &PgPool,
+        zoom: u8,
+        x: i32,
+        y: i32,
+    ) -> Result<Vec<u8>, sqlx::Error>;
 }
 
 pub mod tm2;
