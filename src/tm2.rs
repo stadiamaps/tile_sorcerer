@@ -10,9 +10,7 @@ use serde::Deserialize;
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{query, PgPool, Row};
-
-use futures::stream::StreamExt;
+use sqlx::{cursor::Cursor, query, PgPool, Row};
 
 /// A TileMill (.tm2source) data structure.
 ///
@@ -120,7 +118,13 @@ impl TM2Source {
 
 #[async_trait]
 impl TileSource for TM2Source {
-    async fn render_mvt(&self, pool: &PgPool, zoom: u8, x: i32, y: i32) -> Result<Vec<u8>, sqlx::Error> {
+    async fn render_mvt(
+        &self,
+        pool: &PgPool,
+        zoom: u8,
+        x: i32,
+        y: i32,
+    ) -> Result<Vec<u8>, sqlx::Error> {
         let z: i32 = zoom.into();
         let tile_bounds = get_epsg_3857_tile_bounds(self.pixel_scale, zoom, x, y, 0);
         let buffer_sizes = self.buffer_sizes();
@@ -147,14 +151,9 @@ impl TileSource for TM2Source {
 
         let mut raw_tile: Vec<u8> = Vec::new();
         let mut stream = query.fetch(&mut conn);
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(row) => {
-                    let layer: Vec<u8> = row.get(0);
-                    raw_tile.extend_from_slice(&layer);
-                }
-                Err(e) => return Err(e),
-            }
+        while let Some(row) = stream.next().await? {
+            let layer: Vec<u8> = row.get(0);
+            raw_tile.extend_from_slice(&layer);
         }
 
         Ok(raw_tile)
