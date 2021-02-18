@@ -1,6 +1,7 @@
-/// TileMill Layer Source YAML Format
-///
-/// Further reading: https://tilemill-project.github.io/tilemill/docs/manual/adding-layers/
+//! Data models and trait implementations for TileMill 2 yaml sources.
+//!
+//! Further reading: https://tilemill-project.github.io/tilemill/docs/manual/adding-layers/
+
 use crate::{get_epsg_3857_tile_bounds, TileSource};
 
 use std::collections::HashMap;
@@ -10,9 +11,9 @@ use serde::Deserialize;
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{cursor::Cursor, query, PgPool, Row};
+use sqlx::{query, PgPool, Row};
 
-/// A TileMill (.tm2source) data structure.
+/// The TileMill (.tm2source) data source model.
 ///
 /// Note: The current data structure is not entirely complete. See the
 /// crate README for limitations.
@@ -31,6 +32,7 @@ pub struct TM2Source {
     pub bounds: [f64; 4],
 }
 
+/// A single layer of a TM2Source
 #[derive(Clone, Deserialize, Debug)]
 pub struct DataLayer {
     pub id: String,
@@ -40,12 +42,14 @@ pub struct DataLayer {
     // TODO: srs
 }
 
+/// A `DataLayer`'s source details
 #[derive(Clone, Deserialize, Debug)]
 pub struct LayerSource {
     pub table: String,
     // TODO: Database connection parameters
 }
 
+/// Additional properties of a `DataLayer`
 #[derive(Clone, Deserialize, Debug)]
 pub struct DataLayerProperties {
     #[serde(rename = "buffer-size")]
@@ -150,8 +154,8 @@ impl TileSource for TM2Source {
         });
 
         let mut raw_tile: Vec<u8> = Vec::new();
-        let mut stream = query.fetch(&mut conn);
-        while let Some(row) = stream.next().await? {
+        let results = query.fetch_all(&mut conn).await?;
+        for row in results {
             let layer: Vec<u8> = row.get(0);
             raw_tile.extend_from_slice(&layer);
         }

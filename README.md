@@ -6,7 +6,8 @@ Tools for modeling and querying vector tile sources.
 
 ## Current status
 
-This code should be regarded as stable beta. While there are a number of
+This crate should be regarded as stable in terms of code correctness, but not
+yet stable in terms of trait and method signatures and feature set. While there are a number of
 known limitations, this code is being deployed at scale already. We are
 releasing this code in Rust tradition as 0.x until we feel the interface
 and feature set have stabilized, but welcome usage and contributions from
