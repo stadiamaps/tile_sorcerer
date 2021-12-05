@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use sqlx::{query, PgPool, Row};
 
 const TILE_EXTENT: u16 = 4096;
+const TILE_SIZE: u16 = 512;
 
 /// The TileMill (.tm2source) data source model.
 ///
@@ -57,6 +58,12 @@ pub struct DataLayerProperties {
     pub buffer_size: i64,
 }
 
+impl DataLayerProperties {
+    fn buffer_size_as_tile_pct(&self) -> f32 {
+        self.buffer_size as f32 / TILE_SIZE as f32
+    }
+}
+
 impl TM2Source {
     /// Constructs a new TM2Source using a TM2 format YAML string
     pub fn from(data: &str) -> Result<TM2Source, failure::Error> {
@@ -83,7 +90,7 @@ impl TM2Source {
             .map(|layer| {
                 let geom = format!(
                     "ST_AsMVTGeom(geometry,!bbox_nobuffer!,{},{},{}) as geom",
-                    TILE_EXTENT, layer.properties.buffer_size, true
+                    TILE_EXTENT, (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32, true
                 );
 
                 let query = layer
@@ -97,7 +104,7 @@ impl TM2Source {
                         "!bbox!",
                         &format!(
                             "ST_TileEnvelope($1, $2, $3, margin => {})",
-                            layer.properties.buffer_size as f32 / TILE_EXTENT as f32
+                            layer.properties.buffer_size_as_tile_pct()
                         ),
                     );
 
