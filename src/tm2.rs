@@ -9,7 +9,7 @@ use serde::Deserialize;
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{query, PgPool, Row};
+use sqlx::{query, PgConnection, Row};
 
 const TILE_EXTENT: u16 = 4096;
 const TILE_SIZE: u16 = 512;
@@ -90,7 +90,9 @@ impl TM2Source {
             .map(|layer| {
                 let geom = format!(
                     "ST_AsMVTGeom(geometry,!bbox_nobuffer!,{},{},{}) as geom",
-                    TILE_EXTENT, (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32, true
+                    TILE_EXTENT,
+                    (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32,
+                    true
                 );
 
                 let query = layer
@@ -98,8 +100,8 @@ impl TM2Source {
                     .table
                     .replace("geometry", &geom)
                     .replace("!bbox_nobuffer!", "ST_TileEnvelope($1, $2, $3)")
-                    .replace("z(!scale_denominator!)", "$4")
-                    .replace("!pixel_width!", "$5")
+                    .replace("z(!scale_denominator!)", "$1")
+                    .replace("!pixel_width!", "$4")
                     .replace(
                         "!bbox!",
                         &format!(
@@ -134,26 +136,19 @@ impl TM2Source {
 impl TileSource for TM2Source {
     async fn render_mvt(
         &self,
-        pool: &PgPool,
+        conn: &mut PgConnection,
         zoom: u8,
         x: i32,
         y: i32,
     ) -> Result<Vec<u8>, sqlx::Error> {
-        let z: i32 = zoom.into();
-
-        let prepare_sql = self.prepared_statement_sql();
-
-        let mut conn = pool.acquire().await?;
-        let query = query(&prepare_sql)
-            .bind(z)
+        query(&self.prepared_statement_sql())
+            .bind(zoom as i32)
             .bind(x)
             .bind(y)
-            .bind(z)
-            .bind(self.pixel_scale);
-
-        let raw_tile = query.fetch_one(&mut conn).await?.get(0);
-
-        Ok(raw_tile)
+            .bind(self.pixel_scale)
+            .fetch_one(conn)
+            .await?
+            .try_get(0)
     }
 }
 

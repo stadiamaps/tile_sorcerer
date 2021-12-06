@@ -33,7 +33,7 @@
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 /// This is the main trait exported by this crate. It is presently rather barebones,
 /// but is open for future expansion if other formats become relevant.
@@ -42,7 +42,7 @@ pub trait TileSource: Sized {
     /// Renders the Mapbox vector tile for a slippy map tile in XYZ format.
     async fn render_mvt(
         &self,
-        pool: &PgPool,
+        conn: &mut PgConnection,
         zoom: u8,
         x: i32,
         y: i32,
