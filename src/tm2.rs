@@ -4,12 +4,15 @@
 
 use crate::TileSource;
 
-use serde::Deserialize;
-
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
+// Note: `race` is okay because we don't care about synchronization since the operation is idempotent.
+// Setting the value to the first-finished is sufficient for our needs.
+use once_cell::race::OnceBox;
+use serde::Deserialize;
 use sqlx::{query, PgConnection, Row};
+use std::sync::Arc;
 
 const TILE_EXTENT: u16 = 4096;
 const TILE_SIZE: u16 = 512;
@@ -31,6 +34,8 @@ pub struct TM2Source {
     pub max_zoom: i64,
     pub center: [f64; 3],
     pub bounds: [f64; 4],
+    #[serde(skip)]
+    cached_sql: Arc<OnceBox<String>>,
 }
 
 /// A single layer of a TM2Source
@@ -83,52 +88,54 @@ impl TM2Source {
         Ok(result)
     }
 
-    fn prepared_statement_sql(&self) -> String {
-        let layers = self
-            .layers
-            .iter()
-            .map(|layer| {
-                let geom = format!(
-                    "ST_AsMVTGeom(geometry,!bbox_nobuffer!,{},{},{}) as geom",
-                    TILE_EXTENT,
-                    (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32,
-                    true
-                );
-
-                let query = layer
-                    .source
-                    .table
-                    .replace("geometry", &geom)
-                    .replace("!bbox_nobuffer!", "ST_TileEnvelope($1, $2, $3)")
-                    .replace("z(!scale_denominator!)", "$1")
-                    .replace("!pixel_width!", "$4")
-                    .replace(
-                        "!bbox!",
-                        &format!(
-                            "ST_TileEnvelope($1, $2, $3, margin => {})",
-                            layer.properties.buffer_size_as_tile_pct()
-                        ),
+    fn prepared_statement_sql(&self) -> &str {
+        self.cached_sql.get_or_init(|| {
+            let layers = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    let geom = format!(
+                        "ST_AsMVTGeom(geometry,!bbox_nobuffer!,{},{},{}) as geom",
+                        TILE_EXTENT,
+                        (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32,
+                        true
                     );
 
-                let key_field = if !layer.source.key_field.is_empty() {
-                    format!(", '{}'", layer.source.key_field)
-                } else {
-                    String::new()
-                };
+                    let query = layer
+                        .source
+                        .table
+                        .replace("geometry", &geom)
+                        .replace("!bbox_nobuffer!", "ST_TileEnvelope($1, $2, $3)")
+                        .replace("z(!scale_denominator!)", "$1")
+                        .replace("!pixel_width!", "$4")
+                        .replace(
+                            "!bbox!",
+                            &format!(
+                                "ST_TileEnvelope($1, $2, $3, margin => {})",
+                                layer.properties.buffer_size_as_tile_pct()
+                            ),
+                        );
 
-                let column = format!(
-                    "ST_AsMVT(t.*, '{}', {}, 'geom'{})",
-                    layer.id, TILE_EXTENT, key_field
-                );
+                    let key_field = if !layer.source.key_field.is_empty() {
+                        format!(", '{}'", layer.source.key_field)
+                    } else {
+                        String::new()
+                    };
 
-                format!("SELECT {} AS mvt FROM ({}) as t", column, query)
-            })
-            .collect::<Vec<_>>();
+                    let column = format!(
+                        "ST_AsMVT(t.*, '{}', {}, 'geom'{})",
+                        layer.id, TILE_EXTENT, key_field
+                    );
 
-        format!(
-            "SELECT STRING_AGG(a.mvt, NULL) FROM ({}) a",
-            layers.join(" UNION ALL ")
-        )
+                    format!("SELECT {} AS mvt FROM ({}) as t", column, query)
+                })
+                .collect::<Vec<_>>();
+
+            Box::new(format!(
+                "SELECT STRING_AGG(a.mvt, NULL) FROM ({}) a",
+                layers.join(" UNION ALL ")
+            ))
+        })
     }
 }
 
@@ -141,7 +148,7 @@ impl TileSource for TM2Source {
         x: i32,
         y: i32,
     ) -> Result<Vec<u8>, sqlx::Error> {
-        query(&self.prepared_statement_sql())
+        query(self.prepared_statement_sql())
             .bind(zoom as i32)
             .bind(x)
             .bind(y)
@@ -218,6 +225,7 @@ mod tests {
             max_zoom: 14,
             center: [0.0, 0.0, 4.0],
             bounds: [-180.0, -85.0511, 180.0, 85.0511],
+            cached_sql: Arc::new(OnceBox::new()),
         };
 
         let sql = source.prepared_statement_sql();
