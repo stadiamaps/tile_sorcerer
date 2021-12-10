@@ -2,16 +2,20 @@
 //!
 //! Further reading: https://tilemill-project.github.io/tilemill/docs/manual/adding-layers/
 
-use crate::{get_epsg_3857_tile_bounds, TileSource};
-
-use std::collections::HashMap;
-
-use serde::Deserialize;
+use crate::TileSource;
 
 // TODO: remove once async fn in traits become stable
 use async_trait::async_trait;
 
-use sqlx::{query, PgPool, Row};
+// Note: `race` is okay because we don't care about synchronization since the operation is idempotent.
+// Setting the value to the first-finished is sufficient for our needs.
+use once_cell::race::OnceBox;
+use serde::Deserialize;
+use sqlx::{query, PgConnection, Row};
+use std::sync::Arc;
+
+const TILE_EXTENT: u16 = 4096;
+const TILE_SIZE: u16 = 512;
 
 /// The TileMill (.tm2source) data source model.
 ///
@@ -30,6 +34,8 @@ pub struct TM2Source {
     pub max_zoom: i64,
     pub center: [f64; 3],
     pub bounds: [f64; 4],
+    #[serde(skip)]
+    cached_sql: Arc<OnceBox<String>>,
 }
 
 /// A single layer of a TM2Source
@@ -46,6 +52,7 @@ pub struct DataLayer {
 #[derive(Clone, Deserialize, Debug)]
 pub struct LayerSource {
     pub table: String,
+    pub key_field: String,
     // TODO: Database connection parameters
 }
 
@@ -54,6 +61,12 @@ pub struct LayerSource {
 pub struct DataLayerProperties {
     #[serde(rename = "buffer-size")]
     pub buffer_size: i64,
+}
+
+impl DataLayerProperties {
+    fn buffer_size_as_tile_pct(&self) -> f32 {
+        self.buffer_size as f32 / TILE_SIZE as f32
+    }
 }
 
 impl TM2Source {
@@ -75,48 +88,54 @@ impl TM2Source {
         Ok(result)
     }
 
-    // This should be used when building up and executing the prepared statement,
-    // as it guarantees consistent ordering of the buffers
-    fn buffer_sizes(&self) -> Vec<i64> {
-        let mut result: Vec<i64> = self
-            .layers
-            .iter()
-            .map(|x| x.properties.buffer_size)
-            .collect();
-        result.sort_unstable();
-        result.dedup();
+    fn prepared_statement_sql(&self) -> &str {
+        self.cached_sql.get_or_init(|| {
+            let layers = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    let geom = format!(
+                        "ST_AsMVTGeom(geometry,!bbox_nobuffer!,{},{},{}) as geom",
+                        TILE_EXTENT,
+                        (layer.properties.buffer_size_as_tile_pct() * TILE_EXTENT as f32) as i32,
+                        true
+                    );
 
-        result
-    }
+                    let query = layer
+                        .source
+                        .table
+                        .replace("geometry", &geom)
+                        .replace("!bbox_nobuffer!", "ST_TileEnvelope($1, $2, $3)")
+                        .replace("z(!scale_denominator!)", "$1")
+                        .replace("!pixel_width!", "$4")
+                        .replace(
+                            "!bbox!",
+                            &format!(
+                                "ST_TileEnvelope($1, $2, $3, margin => {})",
+                                layer.properties.buffer_size_as_tile_pct()
+                            ),
+                        );
 
-    fn prepared_statement_sql(&self) -> String {
-        // Build a mapping of buffer values to parameter indexes. These indexes will
-        // be interpolated into the query later. The 7+ is necessary because these buffer sizes
-        // get added to the end of the query as we build it.
-        let buffer_param_indices: HashMap<i64, i64> = self
-            .buffer_sizes()
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.to_owned(), 7 + (i * 4) as i64))
-            .collect();
+                    let key_field = if !layer.source.key_field.is_empty() {
+                        format!(", '{}'", layer.source.key_field)
+                    } else {
+                        String::new()
+                    };
 
-        let queries: Vec<String> = self.layers.iter().map(|layer| {
-            let buffer_param_index = buffer_param_indices[&layer.properties.buffer_size];
+                    let column = format!(
+                        "ST_AsMVT(t.*, '{}', {}, 'geom'{})",
+                        layer.id, TILE_EXTENT, key_field
+                    );
 
-            let clip = layer.properties.buffer_size < 8;  // TODO: Not necessarily scientific...
-            let geom = format!("ST_AsMVTGeom(geometry,!bbox_nobuffer!,4096,{},{})", layer.properties.buffer_size, clip);
-            let layer_query = layer.source.table.replace("geometry", &format!("{} as mvtgeometry", geom));
+                    format!("SELECT {} AS mvt FROM ({}) as t", column, query)
+                })
+                .collect::<Vec<_>>();
 
-            // TODO: look into wrapping everything in a single ST_AsMVT for better parallelism
-            let base_query = format!("SELECT ST_ASMVT(tile, '{}', 4096, 'mvtgeometry') FROM ({} WHERE {} IS NOT NULL) AS tile", layer.id, layer_query, geom);
-            base_query
-                .replace("!bbox_nobuffer!", "ST_MakeBox2D(ST_Point($1, $2), ST_Point($3, $4))")
-                .replace("z(!scale_denominator!)", "$5")
-                .replace("!pixel_width!", "$6")
-                .replace("!bbox!", &format!("ST_MakeBox2D(ST_Point(${}, ${}), ST_Point(${}, ${}))", buffer_param_index, buffer_param_index + 1, buffer_param_index + 2, buffer_param_index + 3))
-        }).collect();
-
-        queries.join(" UNION ALL ")
+            Box::new(format!(
+                "SELECT STRING_AGG(a.mvt, NULL) FROM ({}) a",
+                layers.join(" UNION ALL ")
+            ))
+        })
     }
 }
 
@@ -124,43 +143,19 @@ impl TM2Source {
 impl TileSource for TM2Source {
     async fn render_mvt(
         &self,
-        pool: &PgPool,
+        conn: &mut PgConnection,
         zoom: u8,
         x: i32,
         y: i32,
     ) -> Result<Vec<u8>, sqlx::Error> {
-        let z: i32 = zoom.into();
-        let tile_bounds = get_epsg_3857_tile_bounds(self.pixel_scale, zoom, x, y, 0);
-        let buffer_sizes = self.buffer_sizes();
-        let buffered_tile_bounds = buffer_sizes.iter().map(|buffer_size| {
-            get_epsg_3857_tile_bounds(self.pixel_scale, zoom, x, y, buffer_size.to_owned())
-        });
-
-        let prepare_sql = self.prepared_statement_sql();
-
-        let mut conn = pool.acquire().await?;
-        let init_query = query(&prepare_sql)
-            .bind(tile_bounds.west)
-            .bind(tile_bounds.south)
-            .bind(tile_bounds.east)
-            .bind(tile_bounds.north)
-            .bind(z)
-            .bind(self.pixel_scale);
-        let query = buffered_tile_bounds.fold(init_query, |acc, bbox| {
-            acc.bind(bbox.west)
-                .bind(bbox.south)
-                .bind(bbox.east)
-                .bind(bbox.north)
-        });
-
-        let mut raw_tile: Vec<u8> = Vec::new();
-        let results = query.fetch_all(&mut conn).await?;
-        for row in results {
-            let layer: Vec<u8> = row.get(0);
-            raw_tile.extend_from_slice(&layer);
-        }
-
-        Ok(raw_tile)
+        query(self.prepared_statement_sql())
+            .bind(zoom as i32)
+            .bind(x)
+            .bind(y)
+            .bind(self.pixel_scale)
+            .fetch_one(conn)
+            .await?
+            .try_get(0)
     }
 }
 
@@ -205,13 +200,15 @@ mod tests {
                     properties: DataLayerProperties { buffer_size: 4 },
                     source: LayerSource {
                         table: String::from("(SELECT geometry FROM layer_water(!bbox!))"),
+                        key_field: String::from(""),
                     },
                 },
                 DataLayer {
                     id: String::from("land"),
                     properties: DataLayerProperties { buffer_size: 4 },
                     source: LayerSource {
-                        table: String::from("(SELECT geometry FROM layer_land(!bbox!))"),
+                        table: String::from("(SELECT geometry, osm_id FROM layer_land(!bbox!))"),
+                        key_field: String::from("osm_id"),
                     },
                 },
                 DataLayer {
@@ -219,6 +216,7 @@ mod tests {
                     properties: DataLayerProperties { buffer_size: 32 },
                     source: LayerSource {
                         table: String::from("(SELECT geometry FROM layer_poi(!bbox!))"),
+                        key_field: String::from(""),
                     },
                 },
             ],
@@ -227,6 +225,7 @@ mod tests {
             max_zoom: 14,
             center: [0.0, 0.0, 4.0],
             bounds: [-180.0, -85.0511, 180.0, 85.0511],
+            cached_sql: Arc::new(OnceBox::new()),
         };
 
         let sql = source.prepared_statement_sql();
@@ -235,8 +234,11 @@ mod tests {
         assert_ne!(0, sql.len());
 
         // Check that the layers show up
-        assert_eq!(sql.contains("SELECT ST_ASMVT(tile, \'water\'"), true);
-        assert_eq!(sql.contains("SELECT ST_ASMVT(tile, \'land\'"), true);
-        assert_eq!(sql.contains("SELECT ST_ASMVT(tile, \'poi\'"), true);
+        assert!(sql.contains("layer_water"));
+        assert!(sql.contains("layer_land"));
+        assert!(sql.contains("layer_poi"));
+        assert_eq!(sql.matches("ST_AsMVT(").collect::<Vec<_>>().len(), 3);
+        assert_eq!(sql.matches("ST_AsMVTGeom(").collect::<Vec<_>>().len(), 3);
+        assert_eq!(sql.matches("osm_id").collect::<Vec<_>>().len(), 2);
     }
 }

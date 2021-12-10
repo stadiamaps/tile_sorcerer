@@ -1,6 +1,6 @@
 [package]
 name = "tile_sorcerer"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Ian Wagner <ian@stadiamaps.com>", "Luke Seelenbinder <luke@stadiamaps.com>"]
 license = "BSD-3-Clause"
 repository = "https://github.com/stadiamaps/tile_sorcerer"
@@ -11,20 +11,21 @@ keywords = ["gis", "vector", "map", "tiles"]
 edition = "2018"
 
 [dependencies]
-failure = "~0.1"
-futures = "~0.3"
-serde_yaml = "~0.8"
-slippy_map_tilenames = "~0.2"
-async-trait = "~0.1"
+async-trait = "0.1"
+failure = "0.1"
+futures = "0.3"
+once_cell = "1.8.0"
+serde_yaml = "0.8"
+slippy_map_tilenames = "0.2"
 
 [dependencies.serde]
-version = "~1.0"
+version = "1.0"
 features = ["derive"]
 
 [dependencies.sqlx]
-version = "~0.5"
+version = "0.5"
 default-features = false
 features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "tls"]
 
 [dev-dependencies]
-assert_approx_eq = "~1.1"
+assert_approx_eq = "1.1"
