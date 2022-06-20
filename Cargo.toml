@@ -1,6 +1,6 @@
 [package]
 name = "tile_sorcerer"
-version = "0.4.0"
+version = "1.0.0"
 authors = ["Ian Wagner <ian@stadiamaps.com>", "Luke Seelenbinder <luke@stadiamaps.com>"]
 license = "BSD-3-Clause"
 repository = "https://github.com/stadiamaps/tile_sorcerer"
@@ -8,7 +8,7 @@ readme = "README.md"
 description = "Tools for modeling and querying vector tile sources"
 categories = ["parser-implementations", "database", "science"]
 keywords = ["gis", "vector", "map", "tiles"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
@@ -23,7 +23,7 @@ version = "1.0"
 features = ["derive"]
 
 [dependencies.sqlx]
-version = "0.5"
+version = "0.6"
 default-features = false
 features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "tls"]
 
