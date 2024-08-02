@@ -2,10 +2,7 @@
 //!
 //! Further reading: https://tilemill-project.github.io/tilemill/docs/manual/adding-layers/
 
-use crate::TileSource;
-
-// TODO: remove once async fn in traits become stable
-use async_trait::async_trait;
+use crate::{Error, TileSource};
 
 // Note: `race` is okay because we don't care about synchronization since the operation is idempotent.
 // Setting the value to the first-finished is sufficient for our needs.
@@ -71,7 +68,7 @@ impl DataLayerProperties {
 
 impl TM2Source {
     /// Constructs a new TM2Source using a TM2 format YAML string
-    pub fn from(data: &str) -> Result<TM2Source, failure::Error> {
+    pub fn from(data: &str) -> Result<TM2Source, Error> {
         let mut result: TM2Source = serde_yaml::from_str(data)?;
 
         for layer in result.layers.iter_mut() {
@@ -139,7 +136,6 @@ impl TM2Source {
     }
 }
 
-#[async_trait]
 impl TileSource for TM2Source {
     async fn render_mvt(
         &self,

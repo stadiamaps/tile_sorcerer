@@ -30,23 +30,22 @@
 
 #![deny(warnings)]
 
-// TODO: remove once async fn in traits become stable
-use async_trait::async_trait;
-
 use sqlx::PgConnection;
 
 /// This is the main trait exported by this crate. It is presently rather barebones,
 /// but is open for future expansion if other formats become relevant.
-#[async_trait]
 pub trait TileSource: Sized {
     /// Renders the Mapbox vector tile for a slippy map tile in XYZ format.
-    async fn render_mvt(
+    fn render_mvt(
         &self,
         conn: &mut PgConnection,
         zoom: u8,
         x: i32,
         y: i32,
-    ) -> Result<Vec<u8>, sqlx::Error>;
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, sqlx::Error>> + Send;
 }
 
 pub mod tm2;
+mod error;
+
+pub use error::Error;
