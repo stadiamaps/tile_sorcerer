@@ -8,7 +8,7 @@ use crate::{Error, TileSource};
 // Setting the value to the first-finished is sufficient for our needs.
 use once_cell::race::OnceBox;
 use serde::Deserialize;
-use sqlx::{query, PgConnection, Row};
+use sqlx::{AssertSqlSafe, PgConnection, Row, query};
 use std::sync::Arc;
 
 const TILE_EXTENT: u16 = 4096;
@@ -85,8 +85,8 @@ impl TM2Source {
         Ok(result)
     }
 
-    fn prepared_statement_sql(&self) -> &str {
-        self.cached_sql.get_or_init(|| {
+    fn prepared_statement_sql(&self) -> AssertSqlSafe<&str> {
+        AssertSqlSafe(self.cached_sql.get_or_init(|| {
             let layers = self
                 .layers
                 .iter()
@@ -132,7 +132,7 @@ impl TM2Source {
                 "SELECT STRING_AGG(a.mvt, NULL) FROM ({}) a",
                 layers.join(" UNION ALL ")
             ))
-        })
+        }))
     }
 }
 
@@ -224,7 +224,7 @@ mod tests {
             cached_sql: Arc::new(OnceBox::new()),
         };
 
-        let sql = source.prepared_statement_sql();
+        let sql = source.prepared_statement_sql().0;
 
         // Make sure it's not empty
         assert_ne!(0, sql.len());
